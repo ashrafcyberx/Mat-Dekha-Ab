@@ -1,0 +1,60 @@
+name: Build APK
+on:
+  push:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Unzip project (newest MatDekhaAb zip)
+        run: |
+          ZIP=$(ls MatDekhaAb*.zip | sort -V | tail -1)
+          echo "Using $ZIP"
+          mkdir -p src && unzip -q -o "$ZIP" -d src
+          DIR=$(dirname "$(find src -name settings.gradle.kts | head -1)")
+          echo "Project dir: $DIR"
+          echo "PROJECT_DIR=$DIR" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Prepare Android SDK (already on runner)
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKM" --licenses > /dev/null 2>&1 || true
+          "$SDKM" "platforms;android-34" "build-tools;34.0.0" > /dev/null 2>&1 || true
+          ls "$ANDROID_HOME/platforms" || true
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.7
+
+      - name: Build debug APK
+        run: |
+          set -o pipefail
+          cd "$PROJECT_DIR"
+          gradle :app:assembleDebug --no-daemon --stacktrace 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
+
+      - name: Show errors (only if build failed)
+        if: failure()
+        run: |
+          PAT='^e: |error:|What went wrong|Execution failed|Could not |FAILED|Unresolved|Duplicate'
+          grep -nE "$PAT" build.log | head -25 | while IFS= read -r line; do echo "::error::${line}"; done || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: build-log
+          path: build.log
+          if-no-files-found: ignore
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MatDekhaAb-apk
+          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/*.apk
+          
